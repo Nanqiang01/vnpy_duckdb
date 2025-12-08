@@ -1,4 +1,4 @@
-# DuckDB adapter for Vnpy
+# DuckDB adapter for Vnpy (using PostgreSQL as backend)
 
 <p align="center">
   <img src ="https://vnpy.oss-cn-shanghai.aliyuncs.com/vnpy-logo.png"/>
