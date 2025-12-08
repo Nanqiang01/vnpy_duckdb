@@ -2,7 +2,6 @@ from datetime import datetime
 
 import duckdb
 import polars as pl
-from vnpy.trader.utility import get_file_path
 from vnpy.trader.constant import Exchange, Interval
 from vnpy.trader.object import BarData, TickData
 from vnpy.trader.database import (
@@ -23,7 +22,7 @@ CREATE_BAR_TABLE_QUERY: str = """
 CREATE TABLE IF NOT EXISTS pg.public.dbbardata (
     "symbol" VARCHAR(50) NOT NULL,
     "exchange" VARCHAR(20) NOT NULL,
-    "datetime" TIMESTAMPTZ NOT NULL,
+    "datetime" TIMESTAMP NOT NULL,
     "interval" VARCHAR(10) NOT NULL,
     "volume" FLOAT,
     "turnover" FLOAT,
@@ -40,7 +39,7 @@ CREATE_TICK_TABLE_QUERY: str = """
 CREATE TABLE IF NOT EXISTS pg.public.dbtickdata (
     "symbol" VARCHAR(50) NOT NULL,
     "exchange" VARCHAR(20) NOT NULL,
-    "datetime" TIMESTAMPTZ NOT NULL,
+    "datetime" TIMESTAMP NOT NULL,
     "name" VARCHAR(50),
     "volume" FLOAT,
     "turnover" FLOAT,
@@ -57,7 +56,7 @@ CREATE TABLE IF NOT EXISTS pg.public.dbtickdata (
     "ask_price_1" FLOAT, "ask_price_2" FLOAT, "ask_price_3" FLOAT, "ask_price_4" FLOAT, "ask_price_5" FLOAT,
     "bid_volume_1" FLOAT, "bid_volume_2" FLOAT, "bid_volume_3" FLOAT, "bid_volume_4" FLOAT, "bid_volume_5" FLOAT,
     "ask_volume_1" FLOAT, "ask_volume_2" FLOAT, "ask_volume_3" FLOAT, "ask_volume_4" FLOAT, "ask_volume_5" FLOAT,
-    "localtime" TIMESTAMPTZ,
+    "localtime" TIMESTAMP,
     PRIMARY KEY ("symbol", "exchange", "datetime"),
 );
 """
@@ -68,8 +67,8 @@ CREATE TABLE IF NOT EXISTS pg.public.dbbaroverview (
     "exchange" VARCHAR(20) NOT NULL,
     "interval" VARCHAR(10) NOT NULL,
     "count" INTEGER,
-    "start" TIMESTAMPTZ,
-    "end" TIMESTAMPTZ,
+    "start" TIMESTAMP,
+    "end" TIMESTAMP,
     PRIMARY KEY ("symbol", "exchange", "interval"),
 );
 """
@@ -79,8 +78,8 @@ CREATE TABLE IF NOT EXISTS pg.public.dbtickoverview (
     "symbol" VARCHAR(50) NOT NULL,
     "exchange" VARCHAR(20) NOT NULL,
     "count" INTEGER,
-    "start" TIMESTAMPTZ,
-    "end" TIMESTAMPTZ,
+    "start" TIMESTAMP,
+    "end" TIMESTAMP,
     PRIMARY KEY ("symbol", "exchange"),
 );
 """
@@ -294,8 +293,8 @@ class DuckdbDatabase(BaseDatabase):
         df: pl.DataFrame = pl.from_records(data, schema=[ 
             "symbol",
             "exchange",
-            "interval",
             "datetime",
+            "interval",
             "volume",
             "turnover",
             "open_interest",
