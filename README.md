@@ -1,4 +1,4 @@
-# DuckDB adapter for VeighNa Evo
+# DuckDB adapter for Vnpy
 
 <p align="center">
   <img src ="https://vnpy.oss-cn-shanghai.aliyuncs.com/vnpy-logo.png"/>
