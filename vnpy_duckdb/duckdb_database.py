@@ -15,7 +15,12 @@ from vnpy.trader.setting import SETTINGS
 
 
 db: duckdb.DuckDBPyConnection = duckdb.connect(":memory:")
-db.execute(f"ATTACH 'dbname={SETTINGS["database.database"]} user={SETTINGS["database.user"]} password={SETTINGS["database.password"]} host={SETTINGS["database.host"]} port={SETTINGS["database.port"]}' AS pg (TYPE postgres);")
+dbname = SETTINGS["database.database"]
+user = SETTINGS["database.user"]
+password = SETTINGS["database.password"]
+host = SETTINGS["database.host"]
+port = SETTINGS["database.port"]
+db.execute(f"ATTACH 'dbname={dbname} user={user} password={password} host={host} port={port}' AS pg (TYPE postgres);")
 
 
 CREATE_BAR_TABLE_QUERY: str = """
