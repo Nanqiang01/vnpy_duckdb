@@ -22,7 +22,7 @@ CREATE_BAR_TABLE_QUERY: str = """
 CREATE TABLE IF NOT EXISTS pg.public.dbbardata (
     "symbol" VARCHAR(50) NOT NULL,
     "exchange" VARCHAR(20) NOT NULL,
-    "datetime" TIMESTAMP NOT NULL,
+    "datetime" TIMESTAMPTZ NOT NULL,
     "interval" VARCHAR(10) NOT NULL,
     "volume" FLOAT,
     "turnover" FLOAT,
@@ -31,7 +31,13 @@ CREATE TABLE IF NOT EXISTS pg.public.dbbardata (
     "high_price" FLOAT,
     "low_price" FLOAT,
     "close_price" FLOAT,
-    PRIMARY KEY ("symbol", "exchange", "interval", "datetime"),
+    PRIMARY KEY ("symbol", "exchange", "interval", "datetime")
+) WITH (
+    tsdb.hypertable,
+    tsdb.partition_column='datetime',
+    tsdb.chunk_interval='1 week',
+    tsdb.segmentby='symbol', 
+    tsdb.orderby='datetime DESC'
 );
 """
 
@@ -39,7 +45,7 @@ CREATE_TICK_TABLE_QUERY: str = """
 CREATE TABLE IF NOT EXISTS pg.public.dbtickdata (
     "symbol" VARCHAR(50) NOT NULL,
     "exchange" VARCHAR(20) NOT NULL,
-    "datetime" TIMESTAMP NOT NULL,
+    "datetime" TIMESTAMPTZ NOT NULL,
     "name" VARCHAR(50),
     "volume" FLOAT,
     "turnover" FLOAT,
@@ -56,8 +62,14 @@ CREATE TABLE IF NOT EXISTS pg.public.dbtickdata (
     "ask_price_1" FLOAT, "ask_price_2" FLOAT, "ask_price_3" FLOAT, "ask_price_4" FLOAT, "ask_price_5" FLOAT,
     "bid_volume_1" FLOAT, "bid_volume_2" FLOAT, "bid_volume_3" FLOAT, "bid_volume_4" FLOAT, "bid_volume_5" FLOAT,
     "ask_volume_1" FLOAT, "ask_volume_2" FLOAT, "ask_volume_3" FLOAT, "ask_volume_4" FLOAT, "ask_volume_5" FLOAT,
-    "localtime" TIMESTAMP,
-    PRIMARY KEY ("symbol", "exchange", "datetime"),
+    "localtime" TIMESTAMPTZ,
+    PRIMARY KEY ("symbol", "exchange", "datetime")
+) WITH (
+    tsdb.hypertable,
+    tsdb.partition_column='datetime',
+    tsdb.chunk_interval='1 week',
+    tsdb.segmentby='symbol', 
+    tsdb.orderby='datetime DESC'
 );
 """
 
@@ -67,9 +79,9 @@ CREATE TABLE IF NOT EXISTS pg.public.dbbaroverview (
     "exchange" VARCHAR(20) NOT NULL,
     "interval" VARCHAR(10) NOT NULL,
     "count" INTEGER,
-    "start" TIMESTAMP,
-    "end" TIMESTAMP,
-    PRIMARY KEY ("symbol", "exchange", "interval"),
+    "start" TIMESTAMPTZ,
+    "end" TIMESTAMPTZ,
+    PRIMARY KEY ("symbol", "exchange", "interval")
 );
 """
 
@@ -78,9 +90,9 @@ CREATE TABLE IF NOT EXISTS pg.public.dbtickoverview (
     "symbol" VARCHAR(50) NOT NULL,
     "exchange" VARCHAR(20) NOT NULL,
     "count" INTEGER,
-    "start" TIMESTAMP,
-    "end" TIMESTAMP,
-    PRIMARY KEY ("symbol", "exchange"),
+    "start" TIMESTAMPTZ,
+    "end" TIMESTAMPTZ,
+    PRIMARY KEY ("symbol", "exchange")
 );
 """
 
@@ -274,23 +286,23 @@ class DuckdbDatabase(BaseDatabase):
         bar: BarData = bars[0]
         symbol: str = bar.symbol
         exchange: Exchange = bar.exchange
-        interval: Interval = bar.interval
+        interval: Interval | None = bar.interval
 
         # 转换为 DuckDB 友好的列表格式 (list of Tuples)
         # 顺序必须与 INSERT 语句中的列顺序一致
-        data: list[dict] = []
+        bar_data: list[dict] = []
 
         for bar in bars:
-            bar.datetime = convert_tz(bar.datetime)
+            bar.datetime = convert_tz(bar.datetime).astimezone(DB_TZ)
 
             d: dict = bar.__dict__
             d["exchange"] = d["exchange"].value
             d["interval"] = d["interval"].value
             d.pop("gateway_name")
             d.pop("vt_symbol")
-            data.append(d)
+            bar_data.append(d)
 
-        df: pl.DataFrame = pl.from_records(data, schema=[ 
+        df: pl.DataFrame = pl.from_records(bar_data, schema=[ 
             "symbol",
             "exchange",
             "datetime",
@@ -351,18 +363,18 @@ class DuckdbDatabase(BaseDatabase):
         symbol: str = tick.symbol
         exchange: Exchange = tick.exchange
 
-        data: list[dict] = []
+        tick_data: list[dict] = []
 
         for tick in ticks:
-            tick.datetime = convert_tz(tick.datetime)
+            tick.datetime = convert_tz(tick.datetime).astimezone(DB_TZ)
 
             d: dict = tick.__dict__
             d["exchange"] = d["exchange"].value
             d.pop("gateway_name")
             d.pop("vt_symbol")
-            data.append(d)
+            tick_data.append(d)
 
-        df: pl.DataFrame = pl.from_records(data, schema=[ 
+        df: pl.DataFrame = pl.from_records(tick_data, schema=[ 
             "symbol",
             "exchange",
             "datetime",
