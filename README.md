@@ -20,7 +20,7 @@ This database adapter is designed specifically for Vnpy 4.2.0.
 Users can easily install ``vnpy_duckdb`` by pip according to the following command.
 
 ```
-pip install https://github.com/Nanqiang01/vnpy_duckdb.git@main
+pip install https://github.com/Nanqiang01/vnpy_duckdb.git
 ```
 
 Also, users can install ``vnpy_duckdb`` using the source code. Clone the repository and install as follows:
