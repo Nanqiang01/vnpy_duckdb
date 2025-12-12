@@ -1,4 +1,4 @@
-# DuckDB adapter for Vnpy (using PostgreSQL as backend)
+# DuckDB adapter for Vnpy (using DuckLake as lakehouse, using RustFS as S3 backend)
 
 <p align="center">
   <img src ="https://vnpy.oss-cn-shanghai.aliyuncs.com/vnpy-logo.png"/>
