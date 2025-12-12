@@ -13,21 +13,16 @@ from vnpy.trader.database import (
 )
 from vnpy.trader.setting import SETTINGS
 
-
 db: duckdb.DuckDBPyConnection = duckdb.connect(":memory:")
-dbname = SETTINGS["database.database"]
-user = SETTINGS["database.user"]
-password = SETTINGS["database.password"]
-host = SETTINGS["database.host"]
-port = SETTINGS["database.port"]
-db.execute(f"ATTACH 'dbname={dbname} user={user} password={password} host={host} port={port}' AS pg (TYPE postgres);")
-
+db.execute(f"CREATE SECRET (TYPE S3, KEY_ID '{SETTINGS["database.user"]}', SECRET '{SETTINGS["database.password"]}', ENDPOINT '{SETTINGS["database.host"]}:{SETTINGS["database.port"]}', URL_STYLE 'path', USE_SSL false);")
+db.execute(f"CREATE SECRET (TYPE postgres, HOST '{SETTINGS["database.host"]}', PORT 5432, DATABASE ducklake_catalog, USER 'postgres', PASSWORD 'postgres');")
+db.execute(f"ATTACH 'ducklake:postgres:dbname=ducklake_catalog host=localhost' AS metadata (DATA_PATH 's3://{SETTINGS["database.database"]}/');")
 
 CREATE_BAR_TABLE_QUERY: str = """
-CREATE TABLE IF NOT EXISTS pg.public.dbbardata (
+CREATE TABLE IF NOT EXISTS metadata.dbbardata (
     "symbol" VARCHAR(50) NOT NULL,
     "exchange" VARCHAR(20) NOT NULL,
-    "datetime" TIMESTAMPTZ NOT NULL,
+    "datetime" TIMESTAMP NOT NULL,
     "interval" VARCHAR(10) NOT NULL,
     "volume" FLOAT,
     "turnover" FLOAT,
@@ -36,21 +31,15 @@ CREATE TABLE IF NOT EXISTS pg.public.dbbardata (
     "high_price" FLOAT,
     "low_price" FLOAT,
     "close_price" FLOAT,
-    PRIMARY KEY ("symbol", "exchange", "interval", "datetime")
-) WITH (
-    tsdb.hypertable,
-    tsdb.partition_column='datetime',
-    tsdb.chunk_interval='1 week',
-    tsdb.segmentby='symbol', 
-    tsdb.orderby='datetime DESC'
 );
+ALTER TABLE metadata.dbbardata SET PARTITIONED BY ("interval", "exchange", "symbol");
 """
 
 CREATE_TICK_TABLE_QUERY: str = """
-CREATE TABLE IF NOT EXISTS pg.public.dbtickdata (
+CREATE TABLE IF NOT EXISTS metadata.dbtickdata (
     "symbol" VARCHAR(50) NOT NULL,
     "exchange" VARCHAR(20) NOT NULL,
-    "datetime" TIMESTAMPTZ NOT NULL,
+    "datetime" TIMESTAMP NOT NULL,
     "name" VARCHAR(50),
     "volume" FLOAT,
     "turnover" FLOAT,
@@ -67,69 +56,66 @@ CREATE TABLE IF NOT EXISTS pg.public.dbtickdata (
     "ask_price_1" FLOAT, "ask_price_2" FLOAT, "ask_price_3" FLOAT, "ask_price_4" FLOAT, "ask_price_5" FLOAT,
     "bid_volume_1" FLOAT, "bid_volume_2" FLOAT, "bid_volume_3" FLOAT, "bid_volume_4" FLOAT, "bid_volume_5" FLOAT,
     "ask_volume_1" FLOAT, "ask_volume_2" FLOAT, "ask_volume_3" FLOAT, "ask_volume_4" FLOAT, "ask_volume_5" FLOAT,
-    "localtime" TIMESTAMPTZ,
-    PRIMARY KEY ("symbol", "exchange", "datetime")
-) WITH (
-    tsdb.hypertable,
-    tsdb.partition_column='datetime',
-    tsdb.chunk_interval='1 week',
-    tsdb.segmentby='symbol', 
-    tsdb.orderby='datetime DESC'
+    "localtime" TIMESTAMP,
 );
+ALTER TABLE metadata.dbtickdata SET PARTITIONED BY ("exchange", "symbol");
 """
 
 CREATE_BAROVERVIEW_TABLE_QUERY: str = """
-CREATE TABLE IF NOT EXISTS pg.public.dbbaroverview (
+CREATE TABLE IF NOT EXISTS metadata.dbbaroverview (
     "symbol" VARCHAR(50) NOT NULL,
     "exchange" VARCHAR(20) NOT NULL,
     "interval" VARCHAR(10) NOT NULL,
     "count" INTEGER,
-    "start" TIMESTAMPTZ,
-    "end" TIMESTAMPTZ,
-    PRIMARY KEY ("symbol", "exchange", "interval")
+    "start" TIMESTAMP,
+    "end" TIMESTAMP,
 );
 """
 
 CREATE_TICKOVERVIEW_TABLE_QUERY: str = """
-CREATE TABLE IF NOT EXISTS pg.public.dbtickoverview (
+CREATE TABLE IF NOT EXISTS metadata.dbtickoverview (
     "symbol" VARCHAR(50) NOT NULL,
     "exchange" VARCHAR(20) NOT NULL,
     "count" INTEGER,
-    "start" TIMESTAMPTZ,
-    "end" TIMESTAMPTZ,
-    PRIMARY KEY ("symbol", "exchange")
+    "start" TIMESTAMP,
+    "end" TIMESTAMP,
 );
 """
 
 SAVE_BAR_QUERY: str = """
-INSERT INTO pg.public.dbbardata (
-    "symbol", "exchange", "datetime", "interval", 
-    "volume", "turnover", "open_interest", 
-    "open_price", "high_price", "low_price", "close_price"
-)
-SELECT * FROM df
-ON CONFLICT ("symbol", "exchange", "interval", "datetime") DO UPDATE SET
-    "volume" = EXCLUDED.volume,
-    "turnover" = EXCLUDED.turnover,
-    "open_interest" = EXCLUDED.open_interest,
-    "open_price" = EXCLUDED.open_price,
-    "high_price" = EXCLUDED.high_price,
-    "low_price" = EXCLUDED.low_price,
-    "close_price" = EXCLUDED.close_price;
+MERGE INTO metadata.dbbardata
+    USING df AS upserts
+    ON (
+        dbbardata.symbol = upserts.symbol AND
+        dbbardata.exchange = upserts.exchange AND
+        dbbardata.interval = upserts.interval AND
+        dbbardata.datetime = upserts.datetime
+    )
+    WHEN NOT MATCHED THEN INSERT;
 """
 
 SAVE_BAROVERVIEW_QUERY: str = """
-INSERT INTO pg.public.dbbaroverview VALUES (
-    $symbol, $exchange, $interval, $count, $start, $end
-)
-ON CONFLICT DO UPDATE SET
-    "count" = EXCLUDED.count,
-    "start" = EXCLUDED.start,
-    "end" = EXCLUDED.end;
+MERGE INTO metadata.dbbaroverview 
+    USING (
+        SELECT
+            $symbol AS symbol,
+            $exchange AS exchange,
+            $interval AS interval,
+            $count AS count,
+            $start AS start,
+            $end AS end
+    ) AS upserts
+    ON (
+        dbbaroverview.symbol = upserts.symbol AND
+        dbbaroverview.exchange = upserts.exchange AND
+        dbbaroverview.interval = upserts.interval
+    )
+    WHEN MATCHED THEN UPDATE
+    WHEN NOT MATCHED THEN INSERT;
 """
 
 LOAD_BAR_QUERY: str = """
-SELECT * FROM pg.public.dbbardata
+SELECT * FROM metadata.dbbardata
 WHERE "symbol" = $symbol
     AND "exchange" = $exchange
     AND "interval" = $interval
@@ -139,79 +125,51 @@ ORDER BY "datetime" ASC;
 """
 
 LOAD_BAROVERVIEW_QUERY: str = """
-SELECT * FROM pg.public.dbbaroverview
+SELECT * FROM metadata.dbbaroverview
 WHERE "symbol" = $symbol
     AND "exchange" = $exchange
     AND "interval" = $interval;
 """
 
 COUNT_BAR_QUERY: str = """
-SELECT COUNT("close_price") FROM pg.public.dbbardata
+SELECT COUNT("close_price") FROM metadata.dbbardata
 WHERE "symbol" = $symbol
     AND "exchange" = $exchange
     AND "interval" = $interval
 """
 
 SAVE_TICK_QUERY: str = """
-INSERT INTO pg.public.dbtickdata (
-    "symbol", "exchange", "datetime", 
-    "name", "volume", "turnover", "open_interest", "last_price", "last_volume", "limit_up", "limit_down",
-    "open_price", "high_price", "low_price", "pre_close",
-    "bid_price_1", "bid_price_2", "bid_price_3", "bid_price_4", "bid_price_5",
-    "ask_price_1", "ask_price_2", "ask_price_3", "ask_price_4", "ask_price_5",
-    "bid_volume_1", "bid_volume_2", "bid_volume_3", "bid_volume_4", "bid_volume_5",
-    "ask_volume_1", "ask_volume_2", "ask_volume_3", "ask_volume_4", "ask_volume_5",
-    "localtime"
-)
-SELECT * FROM df
-ON CONFLICT ("symbol", "exchange", "datetime") DO UPDATE SET
-    "name" = EXCLUDED.name,
-    "volume" = EXCLUDED.volume,
-    "turnover" = EXCLUDED.turnover,
-    "open_interest" = EXCLUDED.open_interest,
-    "last_price" = EXCLUDED.last_price,
-    "last_volume" = EXCLUDED.last_volume,
-    "limit_up" = EXCLUDED.limit_up,
-    "limit_down" = EXCLUDED.limit_down,
-    "open_price" = EXCLUDED.open_price,
-    "high_price" = EXCLUDED.high_price,
-    "low_price" = EXCLUDED.low_price,
-    "pre_close" = EXCLUDED.pre_close;
-    "bid_price_1" = EXCLUDED.bid_price_1,
-    "bid_price_2" = EXCLUDED.bid_price_2,
-    "bid_price_3" = EXCLUDED.bid_price_3,
-    "bid_price_4" = EXCLUDED.bid_price_4,
-    "bid_price_5" = EXCLUDED.bid_price_5,
-    "ask_price_1" = EXCLUDED.ask_price_1,
-    "ask_price_2" = EXCLUDED.ask_price_2,
-    "ask_price_3" = EXCLUDED.ask_price_3,
-    "ask_price_4" = EXCLUDED.ask_price_4,
-    "ask_price_5" = EXCLUDED.ask_price_5,
-    "bid_volume_1" = EXCLUDED.bid_volume_1,
-    "bid_volume_2" = EXCLUDED.bid_volume_2,
-    "bid_volume_3" = EXCLUDED.bid_volume_3,
-    "bid_volume_4" = EXCLUDED.bid_volume_4,
-    "bid_volume_5" = EXCLUDED.bid_volume_5,
-    "ask_volume_1" = EXCLUDED.ask_volume_1,
-    "ask_volume_2" = EXCLUDED.ask_volume_2,
-    "ask_volume_3" = EXCLUDED.ask_volume_3,
-    "ask_volume_4" = EXCLUDED.ask_volume_4,
-    "ask_volume_5" = EXCLUDED.ask_volume_5,
-    "localtime" = EXCLUDED.localtime;
+MERGE INTO metadata.dbtickdata
+    USING df AS upserts
+    ON (
+        dbtickdata.symbol = upserts.symbol AND
+        dbtickdata.exchange = upserts.exchange AND
+        dbtickdata.datetime = upserts.datetime
+    )
+    WHEN NOT MATCHED THEN INSERT;
 """
 
 SAVE_TICKOVERVIEW_QUERY: str = """
-INSERT INTO pg.public.dbtickoverview VALUES (
-    $symbol, $exchange, $count, $start, $end
-)
-ON CONFLICT DO UPDATE SET
-    "count" = EXCLUDED.count,
-    "start" = EXCLUDED.start,
-    "end" = EXCLUDED.end;
+MERGE INTO metadata.dbtickoverview 
+    USING (
+        SELECT
+            $symbol AS symbol,
+            $exchange AS exchange,
+            $interval AS interval,
+            $count AS count,
+            $start AS start,
+            $end AS end
+    ) AS upserts
+    ON (
+        dbtickoverview.symbol = upserts.symbol AND
+        dbtickoverview.exchange = upserts.exchange
+    )
+    WHEN MATCHED THEN UPDATE
+    WHEN NOT MATCHED THEN INSERT;
 """
 
 LOAD_TICK_QUERY: str = """
-SELECT * FROM pg.public.dbtickdata
+SELECT * FROM metadata.dbtickdata
 WHERE "symbol" = $symbol
     AND "exchange" = $exchange
     AND "datetime" >= $start
@@ -220,62 +178,64 @@ ORDER BY "datetime" ASC;
 """
 
 LOAD_TICKOVERVIEW_QUERY: str = """
-SELECT * FROM pg.public.dbtickoverview
+SELECT * FROM metadata.dbtickoverview
 WHERE "symbol" = $symbol
     AND "exchange" = $exchange
 """
 
 COUNT_TICK_QUERY: str = """
-SELECT COUNT("last_price") FROM pg.public.dbtickdata
+SELECT COUNT("last_price") FROM metadata.dbtickdata
 WHERE "symbol" = $symbol
     AND "exchange" = $exchange
     AND "interval" = $interval
 """
 
 DELETE_BAR_QUERY: str = """
-DELETE FROM pg.public.dbbardata
+DELETE FROM metadata.dbbardata
 WHERE "symbol" = $symbol
     AND "exchange" = $exchange
     AND "interval" = $interval
 """
 
 DELETE_BAROVERVIEW_QUERY: str = """
-DELETE FROM pg.public.dbbaroverview
+DELETE FROM metadata.dbbaroverview
 WHERE "symbol" = $symbol
     AND "exchange" = $exchange
     AND "interval" = $interval
 """
 
 DELETE_TICK_QUERY: str = """
-DELETE FROM pg.public.dbtickdata
+DELETE FROM metadata.dbtickdata
 WHERE "symbol" = $symbol
     AND "exchange" = $exchange
 """
 
 DELETE_TICKOVERVIEW_QUERY: str = """
-DELETE FROM pg.public.dbtickoverview
+DELETE FROM metadata.dbtickoverview
 WHERE "symbol" = $symbol
     AND "exchange" = $exchange
 """
 
 LOAD_ALL_BAROVERVIEW_QUERY: str = """
-SELECT * FROM pg.public.dbbaroverview;
+SELECT * FROM metadata.dbbaroverview;
 """
 
 LOAD_ALL_TICKOVERVIEW_QUERY: str = """
-SELECT * FROM pg.public.dbtickoverview;
+SELECT * FROM metadata.dbtickoverview;
+"""
+
+MERGE_FILES_QUERY: str = """
+CALL ducklake_merge_adjacent_files('metadata');
 """
 
 class DuckdbDatabase(BaseDatabase):
-    """
-    基于 DuckDB 引擎 + PostgreSQL 存储的数据库接口。
-    DuckDB 用于前端高性能数据处理，PostgreSQL 用于后端持久化存储。
-    """
+    """"""
 
     def __init__(self) -> None:
         """"""
         self.db : duckdb.DuckDBPyConnection = db
         self.cursor: duckdb.DuckDBPyConnection = self.db.cursor()
+        self.cursor.execute(MERGE_FILES_QUERY)
         # 1. K线数据表
         self.cursor.execute(CREATE_BAR_TABLE_QUERY)
         # 2. Tick数据表
@@ -298,7 +258,7 @@ class DuckdbDatabase(BaseDatabase):
         bar_data: list[dict] = []
 
         for bar in bars:
-            bar.datetime = convert_tz(bar.datetime).astimezone(DB_TZ)
+            bar.datetime = convert_tz(bar.datetime)
 
             d: dict = bar.__dict__
             d["exchange"] = d["exchange"].value
@@ -319,7 +279,7 @@ class DuckdbDatabase(BaseDatabase):
             "high_price",
             "low_price",
             "close_price",
-        ])
+        ]).sort(by="datetime")
 
         # 使用upsert操作将数据更新到数据库中
         self.db.execute(SAVE_BAR_QUERY)
@@ -340,8 +300,8 @@ class DuckdbDatabase(BaseDatabase):
                 "symbol": symbol,
                 "exchange": exchange.value,
                 "interval": interval.value,
-                "start": data[0]["datetime"],
-                "end": data[-1]["datetime"],
+                "start": df["datetime"][0],
+                "end": df["datetime"][-1],
                 "count": len(bars)
             }
         # Existing contract
@@ -353,8 +313,8 @@ class DuckdbDatabase(BaseDatabase):
                 "symbol": symbol,
                 "exchange": exchange.value,
                 "interval": interval.value,
-                "start": min(data[0]["datetime"], row[4]),
-                "end": max(data[-1]["datetime"], row[5]),
+                "start": min(df["datetime"][0], row[4]),
+                "end": max(df["datetime"][-1], row[5]),
                 "count": count
             }
 
@@ -371,7 +331,7 @@ class DuckdbDatabase(BaseDatabase):
         tick_data: list[dict] = []
 
         for tick in ticks:
-            tick.datetime = convert_tz(tick.datetime).astimezone(DB_TZ)
+            tick.datetime = convert_tz(tick.datetime)
 
             d: dict = tick.__dict__
             d["exchange"] = d["exchange"].value
@@ -397,7 +357,7 @@ class DuckdbDatabase(BaseDatabase):
             "bid_volume_1", "bid_volume_2", "bid_volume_3", "bid_volume_4", "bid_volume_5",
             "ask_volume_1", "ask_volume_2", "ask_volume_3", "ask_volume_4", "ask_volume_5",
             "localtime",
-        ])
+        ]).sort(by="datetime")
 
         # 使用upsert操作将数据更新到数据库中
         self.db.execute(SAVE_TICK_QUERY)
@@ -416,8 +376,8 @@ class DuckdbDatabase(BaseDatabase):
             data: dict = {
                 "symbol": symbol,
                 "exchange": exchange.value,
-                "start": data[0]["datetime"],
-                "end": data[-1]["datetime"],
+                "start": df["datetime"][0],
+                "end": df["datetime"][-1],
                 "count": len(ticks)
             }
         # Existing contract
@@ -428,8 +388,8 @@ class DuckdbDatabase(BaseDatabase):
             data: dict = {
                 "symbol": symbol,
                 "exchange": exchange.value,
-                "start": min(data[0]["datetime"], row[4]),
-                "end": max(data[-1]["datetime"], row[5]),
+                "start": min(df["datetime"][0], row[4]),
+                "end": max(df["datetime"][-1], row[5]),
                 "count": count
             }
 
